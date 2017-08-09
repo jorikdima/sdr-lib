@@ -71,7 +71,7 @@ LIBS += -L ./ftdi/linux-x86_64 -lftd3xx
 COMMON_FLAGS = -ffunction-sections -fmerge-all-constants $(ARCH)
 COMMON_CFLAGS = -g -O3 -Wall -Wextra $(COMMON_FLAGS)
 CFLAGS = -std=c99  $(COMMON_CFLAGS) -D_POSIX_C_SOURCE
-CXXFLAGS = -std=c++11 $(COMMON_CFLAGS)
+CXXFLAGS = -std=c++14 $(COMMON_CFLAGS)
 
 INCLUDES_PATH=inc
 SRC_PATH=src
@@ -79,10 +79,9 @@ BUILD_PATH=build
 TARGET=test
 
 
-all: clean $(TARGET)
+all: clean info $(TARGET)
 	
-$(TARGET): streamer.o
-	$(info "Building for: " $(SYSTEM) $(ARCHITECTURE))
+$(TARGET): streamer.o	
 	$(CC) $(COMMON_FLAGS) -o $(BUILD_PATH)/$@ $(BUILD_PATH)/$^ $(CXXLIBS) $(LIBS)	
 		
 %.o: $(SRC_PATH)/%.cpp
@@ -90,3 +89,6 @@ $(TARGET): streamer.o
 		
 clean:
 	-rm -f $(BUILD_PATH)/*
+
+info:
+	$(info "Building for: " $(SYSTEM) $(ARCHITECTURE))
