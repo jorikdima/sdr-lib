@@ -50,7 +50,7 @@ all: $(DEMO0) $(DEMO1) $(DEMO2)
 	
 $(DEMO0): streamer.o
 	echo $@ $^
-#$(CC) $(COMMON_FLAGS) -o streamer streamer.o $(CXXLIBS) $(LIBS)
+	$(CC) $(COMMON_FLAGS) -o streamer streamer.o $(CXXLIBS) $(LIBS)
 
 $(DEMO1): rw.o
 	$(CC) $(COMMON_FLAGS) -o $@ $^ $(LIBS)

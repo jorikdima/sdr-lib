@@ -8,7 +8,7 @@
             "request": "launch",
             "program": " ${workspaceRoot}/build/test",
             "args": ["1", "1", "0"],
-            "stopAtEntry": true,
+            "stopAtEntry": false,
             "cwd": "${workspaceRoot}",
             "environment": [],
             "externalConsole": false,

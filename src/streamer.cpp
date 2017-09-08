@@ -19,6 +19,57 @@ static thread write_thread;
 static thread read_thread;
 static const int BUFFER_LEN = 32*1024;
 
+class SDR_HEADER
+{
+public:
+	enum class CMD:uint32_t  {TOFIFO = 0, TOCPU = 1};
+
+	class F2CPU
+	{
+		union BITS
+		{
+			struct 
+			{
+				uint32_t     : 20;
+				uint32_t num : 8;
+				uint32_t id  : 3;
+				uint32_t cmd : 1;
+			};
+			uint32_t flat;
+		};
+		BITS val;
+	public:
+	    constexpr F2CPU(uint8_t id, uint8_t num = 0)
+		:val(BITS{{.num = num, .id = id, .cmd = static_cast<uint32_t>(CMD::TOCPU) }}){}
+		constexpr F2CPU(uint32_t val)
+		:val(BITS{.flat = val}) {}
+
+		operator uint32_t() const noexcept {return val.flat;}
+	};
+
+	class F2FIFO
+	{
+		union BITS
+		{
+			struct 
+			{
+				uint32_t num : 16;
+				uint32_t     : 15;
+				uint32_t cmd : 1;				
+			};
+			uint32_t flat;
+		};
+		BITS val;
+	public:
+	    explicit constexpr F2FIFO(uint16_t num)
+		:val(BITS{{.num = num, .cmd = static_cast<uint32_t>(CMD::TOFIFO)}}){}
+		explicit constexpr F2FIFO(uint32_t val)
+		:val(BITS{.flat = val}) {}
+
+		operator uint32_t() const {return val.flat;}
+	};	
+};
+
 static void show_throughput(FT_HANDLE handle)
 {
 	auto next = chrono::steady_clock::now() + chrono::seconds(1);;
@@ -38,14 +89,14 @@ static void show_throughput(FT_HANDLE handle)
 }
 
 static void write_test(FT_HANDLE handle)
-{
+{	
 	unique_ptr<uint8_t[]> buf(new uint8_t[BUFFER_LEN]);
 
 	while (!do_exit) {
 		for (uint8_t channel = 0; channel < out_ch_cnt; channel++) {
 			ULONG count = 0;
 			if (FT_OK != FT_WritePipeEx(handle, channel,
-						buf.get(), BUFFER_LEN, &count, 1000)) {
+						(PUCHAR)buf.get(), BUFFER_LEN, &count, 1000)) {
 				do_exit = true;
 				break;
 			}
@@ -87,10 +138,11 @@ static void test_gpio(HANDLE handle)
 #define GPIO(x) (1 << (x))
 #define GPIO_OUT(x) (1 << (x))
 #define GPIO_HIGH(x) (1 << (x))
+#define GPIO_LOW(x) (0 << (x))
 
-	DWORD dwMask = GPIO(0) | GPIO(1) | GPIO(2);
-	DWORD dwDirection = GPIO_OUT(0) | GPIO_OUT(1) |GPIO_OUT(2);
-	DWORD dwLevel = GPIO_HIGH(0) | GPIO_HIGH(1) |GPIO_HIGH(2);
+	DWORD dwMask = GPIO(0) | GPIO(1);
+	DWORD dwDirection = GPIO_OUT(0) | GPIO_OUT(1);
+	DWORD dwLevel = GPIO_LOW(0) | GPIO_LOW(1);
 
 	if (FT_NOT_SUPPORTED == FT_EnableGPIO(handle, dwMask, dwDirection)) {
 		printf("FT_EnableGPIO not implemented\r\n");
@@ -105,7 +157,7 @@ static void test_gpio(HANDLE handle)
 		printf("FT_ReadGPIO not implemented\r\n");
 		return;
 	}
-	for (int i = 0; i < 3; i++)
+	for (int i = 0; i < 2; i++)
 		printf("GPIO%d level is %s\r\n", i,
 				dwLevel & GPIO_HIGH(i) ? "high" : "low");
 }
@@ -370,9 +422,101 @@ static bool validate_arguments(int argc, char *argv[])
 	return true;
 }
 
+
+void SetGPIO(FT_HANDLE handle)
+{
+	#define GPIO(x) (1 << (x))
+	#define GPIO_OUT(x) (1 << (x))
+	#define GPIO_HIGH(x) (1 << (x))
+	#define GPIO_LOW(x) (0 << (x))
+	
+		DWORD dwMask = GPIO(0) ;
+		DWORD dwLevel = GPIO_HIGH(0);
+	
+
+		if (FT_OK != FT_WriteGPIO(handle, dwMask, dwLevel)) {
+			printf("FT_WriteGPIO not implemented\r\n");
+			return;
+		}
+}
+
+void test(FT_HANDLE handle)
+{
+	//uint32_t buf[0x20];
+
+    //buf[0] = SDR_HEADER::F2CPU(1, 2);
+	//buf[1] = 0xfeedbeef;
+	//buf[2] = 0xdeefb00b;
+
+	//buf[0] = SDR_HEADER::F2FIFO((uint16_t)0x20);
+
+	uint32_t buf[1024*64];
+	
+		for (uint32_t idx = 0; idx < sizeof(buf)/sizeof(buf[0]); idx++)
+			buf[idx] = idx+1;
+
+        for (uint32_t idx = 0; idx < sizeof(buf)/sizeof(buf[0]); idx++)
+			buf[idx] = (idx&1)?0x5550555:0xaaa0aaa;
+		
+	    //for (uint32_t idx = 0; idx < sizeof(buf)/sizeof(buf[0]); idx++)
+		//	buf[idx] = (idx&1)?0:0xfff0fff;
+		
+		bool flag = true;
+		ULONG iter = 0;
+
+	
+		while(flag)
+		{
+			uint32_t bufrec[sizeof(buf)/sizeof(buf[0])];
+			ULONG count = 0;
+			ULONG count2 = 0;			
+			FT_STATUS status;
+
+			memset(bufrec, -1, sizeof(bufrec));
+	
+			status = FT_WritePipeEx(handle,	0, (PUCHAR)buf, sizeof(buf), &count, 1000);
+			if (FT_OK != status)
+			{
+				printf("Transmitted not OK:%d  %d\r\n", count, status);
+			}		
+	
+			status = FT_ReadPipeEx(handle,	0, (PUCHAR)bufrec, sizeof(bufrec), &count2, 1000);
+			if (FT_OK != status)
+			{
+				printf("Received not OK:%d status %d\r\n", count2, status);
+			}
+	
+			++iter;
+			if (count != count2 || memcmp(bufrec, buf, sizeof(buf)))
+			{
+				DWORD dwBufferred = -1;
+
+				SetGPIO(handle);
+				
+				if (FT_OK != FT_GetReadQueueStatus(handle, 0, &dwBufferred))
+				{
+					printf("Failed to get unread buffer size\r\n");
+				}
+				else
+				    {
+						printf("Not OK: Unread %d\r\n", dwBufferred);
+						uint8_t* p = new uint8_t[dwBufferred];
+						
+								
+						if (dwBufferred > 0 && 
+							FT_OK != FT_GetUnsentBuffer(handle, 0, p, &dwBufferred)) 
+							{
+							printf("Failed to read unsent buffer size\r\n");
+							}
+					}
+			}
+			else
+			    printf("OK:%d\r\n", iter);
+		}
+}
+
 int main(int argc, char *argv[])
 {
-
 	get_version();
 
 	if (!validate_arguments(argc, argv)) {
@@ -384,19 +528,29 @@ int main(int argc, char *argv[])
 		return 1;
 
 	bool rev_a_chip = set_channel_config(
-			fifo_600mode, CONFIGURATION_FIFO_CLK_100);
+			fifo_600mode, CONFIGURATION_FIFO_CLK_66);
 
 	/* Must be called before FT_Create is called */
 	turn_off_thread_safe();
 
 	FT_HANDLE handle;
-
+	
 	FT_Create(0, FT_OPEN_BY_INDEX, &handle);
 
 	if (!handle) {
 		printf("Failed to create device\r\n");
 		return -1;
 	}
+
+	test(handle);
+
+	turn_off_all_pipes();
+	FT_Close(handle);
+
+
+	return 0;
+
+
 	if (out_ch_cnt)
 		write_thread = thread(write_test, handle);
 	if (in_ch_cnt)

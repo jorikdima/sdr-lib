@@ -67,7 +67,8 @@ endif
 endif
 
 
-LIBS += -L ./ftdi/linux-x86_64 -lftd3xx
+#LIBS += -L ./ftdi/linux-x86_64 -lftd3xx
+LIBS += -lftd3xx
 COMMON_FLAGS = -ffunction-sections -fmerge-all-constants $(ARCH)
 COMMON_CFLAGS = -g -O0 -Wall -Wextra $(COMMON_FLAGS)
 CFLAGS = -std=c99  $(COMMON_CFLAGS) -D_POSIX_C_SOURCE

@@ -4,6 +4,9 @@
         "iostream": "cpp",
         "ostream": "cpp",
         "ios": "cpp",
-        "string": "cpp"
+        "string": "cpp",
+        "ratio": "cpp",
+        "thread": "cpp",
+        "chrono": "cpp"
     }
 }
