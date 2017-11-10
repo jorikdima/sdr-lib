@@ -1,10 +1,12 @@
 #include <iostream>
 #include <atomic>
 #include <thread>
-#include <chrono>
+
 #include <csignal>
 #include <cstring>
+#include <math.h>
 #include "ftd3xx.h"
+#include "streamer.h"
 
 using namespace std;
 
@@ -19,56 +21,90 @@ static thread write_thread;
 static thread read_thread;
 static const int BUFFER_LEN = 32*1024;
 
-class SDR_HEADER
+
+
+int OPacketStream::overflow(int c)
 {
-public:
-	enum class CMD:uint32_t  {TOFIFO = 0, TOCPU = 1};
-
-	class F2CPU
+	if (!traits_type::eq_int_type(c, traits_type::eof()))
 	{
-		union BITS
-		{
-			struct 
-			{
-				uint32_t     : 20;
-				uint32_t num : 8;
-				uint32_t id  : 3;
-				uint32_t cmd : 1;
-			};
-			uint32_t flat;
-		};
-		BITS val;
-	public:
-	    constexpr F2CPU(uint8_t id, uint8_t num = 0)
-		:val(BITS{{.num = num, .id = id, .cmd = static_cast<uint32_t>(CMD::TOCPU) }}){}
-		constexpr F2CPU(uint32_t val)
-		:val(BITS{.flat = val}) {}
+		*this->pptr() = c;
+		this->pbump(1);
+	}
+	//this->d_function(d_buffer, this->d_buffer.size());
+	this->PacketReady();
 
-		operator uint32_t() const noexcept {return val.flat;}
-	};
+	this->setp(this->pbase(), this->epptr());
+	
+	return traits_type::not_eof(c);
+}
 
-	class F2FIFO
+int OPacketStream::sync()
+{
+	if ((this->pptr() - this->pbase()) % sizeof(uint32_t))
 	{
-		union BITS
-		{
-			struct 
-			{
-				uint32_t num : 16;
-				uint32_t     : 15;
-				uint32_t cmd : 1;				
-			};
-			uint32_t flat;
-		};
-		BITS val;
-	public:
-	    explicit constexpr F2FIFO(uint16_t num)
-		:val(BITS{{.num = num, .cmd = static_cast<uint32_t>(CMD::TOFIFO)}}){}
-		explicit constexpr F2FIFO(uint32_t val)
-		:val(BITS{.flat = val}) {}
+		PacketReady();
+		this->setp(this->pbase(), this->epptr());
+		cout << "Unalligned data." << endl;
+		return -1; 
+	}		    
 
-		operator uint32_t() const {return val.flat;}
-	};	
-};
+	return 0;
+}
+
+
+OPacketStream::OPacketStream(): streambuf(), ostream(static_cast<streambuf*>(this))
+{
+	this->flags(ios_base::unitbuf);
+
+	auto s = sizeof(this->d_buffer);
+	auto start = reinterpret_cast<char*>(this->d_buffer.data());
+
+	this->setp(start, start + s - 1);
+}
+
+ostream& OPacketStream::flush()
+{
+	ostream::flush();		
+
+	PacketReady();
+
+	return *this;
+}
+
+void OPacketStream::PacketReady()
+{
+	auto elems = elements();
+	if (elems == 0)
+		return;
+	cout << "PacketReady (" << elems << ") words" << endl ;
+	for (auto i = 0u; i < elems; i++)		
+	{
+		cout << std::hex << this->d_buffer[i] << " ";
+	}
+	cout << endl;
+}
+
+
+void tmp()
+{
+	OPacketStream out;
+
+	uint32_t buffer[] = {0xffaafeed,0xabcdefaa,0xffaafeed,0xabcdefaa, 0xffaafeed,0xabcdefaa, 0x55000011};
+	char* buf_ptr = reinterpret_cast<char*>(buffer);
+
+	//out.write(buf_ptr, sizeof(buffer));
+	//out.flush();
+	//out.write(buf_ptr, 4);//sizeof(buffer));
+	//out.write(&buf_ptr[4], 16);
+	//out.write(&buf_ptr[20], 4);
+
+	out << "abcdefghijklmnopqrstuvwxyz";
+	
+	//out << "hello" << ',' << " world: " << 42 << "\n";
+	//out << std::nounitbuf << "not" << " as " << "many" << " calls\n" << std::flush;
+
+	out.write(buf_ptr, 4);
+}
 
 static void show_throughput(FT_HANDLE handle)
 {
@@ -440,83 +476,125 @@ void SetGPIO(FT_HANDLE handle)
 		}
 }
 
+uint32_t buf[1024];
+
+uint32_t bufrec[sizeof(buf)/sizeof(buf[0])];
+
 void test(FT_HANDLE handle)
 {
-	//uint32_t buf[0x20];
-
+	
+#if 1
     //buf[0] = SDR_HEADER::F2CPU(1, 2);
 	//buf[1] = 0xfeedbeef;
 	//buf[2] = 0xdeefb00b;
 
-	//buf[0] = SDR_HEADER::F2FIFO((uint16_t)0x20);
-
-	uint32_t buf[1024*64];
+	buf[0] = SDR_HEADER::F2FIFO((uint16_t)1023);
 	
-		for (uint32_t idx = 0; idx < sizeof(buf)/sizeof(buf[0]); idx++)
-			buf[idx] = idx+1;
+	for (uint32_t idx = 0; idx < 1023; ++idx)
+	{
+		uint32_t val = (idx) % 4096;
+		buf[idx+1] = val + (val << 16);
+	}
 
-        for (uint32_t idx = 0; idx < sizeof(buf)/sizeof(buf[0]); idx++)
-			buf[idx] = (idx&1)?0x5550555:0xaaa0aaa;
-		
-	    //for (uint32_t idx = 0; idx < sizeof(buf)/sizeof(buf[0]); idx++)
-		//	buf[idx] = (idx&1)?0:0xfff0fff;
-		
-		bool flag = true;
-		ULONG iter = 0;
+	//for (uint32_t idx = 0; idx < 0xfff; idx++)
+	//    buf[idx + 1] = (idx&1)?0:0xfff0fff;
 
+#else	
 	
-		while(flag)
+	for (uint32_t idx = 0; idx < sizeof(buf)/sizeof(buf[0]); ++idx)
+		buf[idx] = (idx+1) % 4096;
+
+	for (uint32_t idx = 0; idx < sizeof(buf)/sizeof(buf[0]); idx++)
+		buf[idx] = (idx&1)?0x5550555:0xaaa0aaa;
+	
+	for (uint32_t idx = 0; idx < sizeof(buf)/sizeof(buf[0]); idx++)
+		buf[idx] = (idx&1)?0:0xfff0fff;
+
+	for (uint32_t idx = 0; idx < sizeof(buf)/sizeof(buf[0]); idx++)
+			buf[idx] = (idx&1)?0:0xffffffff;
+#endif
+	
+	bool flag = true;
+	ULONG iter = 0;
+
+	while(flag)
+	{
+		FT_STATUS status;
+		ULONG count2 = 0;
+
+		status = FT_ReadPipeEx(handle,	0, (PUCHAR)bufrec, sizeof(bufrec), &count2, 1000);
+		if (FT_OK != status && status != FT_TIMEOUT)
 		{
-			uint32_t bufrec[sizeof(buf)/sizeof(buf[0])];
-			ULONG count = 0;
-			ULONG count2 = 0;			
-			FT_STATUS status;
-
-			memset(bufrec, -1, sizeof(bufrec));
-	
-			status = FT_WritePipeEx(handle,	0, (PUCHAR)buf, sizeof(buf), &count, 1000);
-			if (FT_OK != status)
-			{
-				printf("Transmitted not OK:%d  %d\r\n", count, status);
-			}		
-	
-			status = FT_ReadPipeEx(handle,	0, (PUCHAR)bufrec, sizeof(bufrec), &count2, 1000);
-			if (FT_OK != status)
-			{
-				printf("Received not OK:%d status %d\r\n", count2, status);
-			}
-	
+			printf("Received not OK:%d status %d\r\n", count2, status);
+		}
+		int words = count2/sizeof(uint32_t);
+		if (words != 0)
+		{
 			++iter;
-			if (count != count2 || memcmp(bufrec, buf, sizeof(buf)))
-			{
-				DWORD dwBufferred = -1;
-
-				SetGPIO(handle);
+			for (int ii = 0; ii < words; ii++) 
+				std::cout << std::hex << bufrec[ii] << std::endl;
 				
-				if (FT_OK != FT_GetReadQueueStatus(handle, 0, &dwBufferred))
-				{
-					printf("Failed to get unread buffer size\r\n");
-				}
-				else
-				    {
-						printf("Not OK: Unread %d\r\n", dwBufferred);
-						uint8_t* p = new uint8_t[dwBufferred];
-						
-								
-						if (dwBufferred > 0 && 
-							FT_OK != FT_GetUnsentBuffer(handle, 0, p, &dwBufferred)) 
-							{
-							printf("Failed to read unsent buffer size\r\n");
-							}
-					}
+			std::cout << std::endl;
+		}
+	}
+
+
+	while(flag)
+	{			
+		ULONG count = 0;
+		ULONG count2 = 0;			
+		FT_STATUS status;
+
+		memset(bufrec, -1, sizeof(bufrec));
+
+		status = FT_WritePipeEx(handle,	0, (PUCHAR)buf, sizeof(buf), &count, 1000);
+		if (FT_OK != status)
+		{
+			printf("Transmitted not OK:%d  %d\r\n", count, status);
+		}		
+
+		status = FT_ReadPipeEx(handle,	0, (PUCHAR)bufrec, sizeof(bufrec), &count2, 1000);
+		if (FT_OK != status)
+		{
+			printf("Received not OK:%d status %d\r\n", count2, status);
+		}
+
+		++iter;
+		//for (const auto& e : bufrec) 
+		//	std::cout << std::hex << e << std::endl;
+		
+		if (count != count2 || memcmp(bufrec, buf, sizeof(buf)))
+		{
+			DWORD dwBufferred = -1;
+
+			SetGPIO(handle);
+			
+			if (FT_OK != FT_GetReadQueueStatus(handle, 0, &dwBufferred))
+			{
+				printf("Failed to get unread buffer size\r\n");
 			}
 			else
-			    printf("OK:%d\r\n", iter);
+				{
+					printf("Not OK: Unread %d\r\n", dwBufferred);
+					uint8_t* p = new uint8_t[dwBufferred];
+					
+							
+					if (dwBufferred > 0 && 
+						FT_OK != FT_GetUnsentBuffer(handle, 0, p, &dwBufferred)) 
+						{
+						printf("Failed to read unsent buffer size\r\n");
+						}
+				}
 		}
+		else
+			printf("OK:%d\r\n", iter);
+	}
 }
 
 int main(int argc, char *argv[])
 {
+	tmp();	
+			
 	get_version();
 
 	if (!validate_arguments(argc, argv)) {
@@ -528,7 +606,7 @@ int main(int argc, char *argv[])
 		return 1;
 
 	bool rev_a_chip = set_channel_config(
-			fifo_600mode, CONFIGURATION_FIFO_CLK_66);
+			fifo_600mode, CONFIGURATION_FIFO_CLK_50);
 
 	/* Must be called before FT_Create is called */
 	turn_off_thread_safe();
@@ -542,13 +620,13 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 
+#if 1
 	test(handle);
 
 	turn_off_all_pipes();
 	FT_Close(handle);
-
-
 	return 0;
+#endif	
 
 
 	if (out_ch_cnt)
