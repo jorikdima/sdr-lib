@@ -2,8 +2,12 @@
 #include <iostream>
 #include <cstring>
 #include <array>
+#include <list>
 #include <functional>
 #include <chrono>
+#include <memory>
+#include <thread>
+#include "ftd3xx.h"
 
 using namespace std;
 
@@ -63,19 +67,25 @@ class OPacketStream
 : private streambuf
 , public ostream {
 public:	
-	OPacketStream();
+	OPacketStream(FT_HANDLE handle);
 	~OPacketStream() { flush();}
 
 	virtual ostream& flush();
 
+	void SendMessage(uint8_t msgId, const list<uint32_t> &data);
+
 private:
-	typedef array<uint32_t, 3> array_type;
+	typedef array<uint32_t, 1023> array_type;
     typedef streambuf::traits_type traits_type;	    
     array_type d_buffer;
     const chrono::milliseconds timeout{100};
+	FT_HANDLE handle;
+	int tx_count;
 
-    void PacketReady();
+    void DataReady();
     unsigned int elements() {return (this->pptr() - this->pbase()) / sizeof(uint32_t);}	
+
+	bool SendPacket(const list<uint32_t> &data);
 
     int overflow(int c);
     int sync();
@@ -86,27 +96,22 @@ class IPacketStream
 : private streambuf
 , public istream {
 public:
-	IPacketStream():
-	streambuf()
-	,istream(static_cast<streambuf*>(this))
-	{
-		this->flags(ios_base::unitbuf);
+	IPacketStream(FT_HANDLE handle);
 
-	
-		auto s = sizeof(this->d_buffer);
-		auto start = reinterpret_cast<char*>(this->d_buffer.data());
-	
-		this->setg(start, start, start + s + 1);
-}
+	~IPacketStream() {delete read_thread;}
 
-	~IPacketStream() { flush();}
 
-	virtual ostream& flush();
+	std::function<void(uint8_t, const list<uint32_t>&)> callback_t;
 
 private:
 	typedef array<uint32_t, 3> array_type;
 	array_type d_buffer;
-    const chrono::milliseconds timeout{100};
+	FT_HANDLE handle;
+    const chrono::milliseconds timeout{1000};
+	int rx_count;
+	thread* read_thread;
 
-	virtual void PacketReady();
+	void DataReaderThread();
+
+	void DataReady();
 };

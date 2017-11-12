@@ -77,7 +77,7 @@ CXXFLAGS = -std=c++14 $(COMMON_CFLAGS)
 INCLUDES_PATH=inc
 SRC_PATH=src
 BUILD_PATH=build
-TARGET=test
+TARGET=streamer
 
 
 all: clean info $(TARGET)

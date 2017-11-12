@@ -1,11 +1,8 @@
-#include <iostream>
 #include <atomic>
-#include <thread>
-
 #include <csignal>
 #include <cstring>
 #include <math.h>
-#include "ftd3xx.h"
+#include <fstream>
 #include "streamer.h"
 
 using namespace std;
@@ -31,7 +28,7 @@ int OPacketStream::overflow(int c)
 		this->pbump(1);
 	}
 	//this->d_function(d_buffer, this->d_buffer.size());
-	this->PacketReady();
+	this->DataReady();
 
 	this->setp(this->pbase(), this->epptr());
 	
@@ -42,7 +39,7 @@ int OPacketStream::sync()
 {
 	if ((this->pptr() - this->pbase()) % sizeof(uint32_t))
 	{
-		PacketReady();
+		this->DataReady();
 		this->setp(this->pbase(), this->epptr());
 		cout << "Unalligned data." << endl;
 		return -1; 
@@ -52,7 +49,8 @@ int OPacketStream::sync()
 }
 
 
-OPacketStream::OPacketStream(): streambuf(), ostream(static_cast<streambuf*>(this))
+OPacketStream::OPacketStream(FT_HANDLE handle)
+: streambuf(), ostream(static_cast<streambuf*>(this))
 {
 	this->flags(ios_base::unitbuf);
 
@@ -60,50 +58,141 @@ OPacketStream::OPacketStream(): streambuf(), ostream(static_cast<streambuf*>(thi
 	auto start = reinterpret_cast<char*>(this->d_buffer.data());
 
 	this->setp(start, start + s - 1);
+
+	this->handle = handle;
+	this->tx_count = 0;
 }
 
 ostream& OPacketStream::flush()
 {
 	ostream::flush();		
 
-	PacketReady();
+	DataReady();
 
 	return *this;
 }
 
-void OPacketStream::PacketReady()
+void OPacketStream::DataReady()
 {
 	auto elems = elements();
 	if (elems == 0)
 		return;
-	cout << "PacketReady (" << elems << ") words" << endl ;
-	for (auto i = 0u; i < elems; i++)		
+	
+	list<uint32_t> packet(this->d_buffer.begin(), this->d_buffer.end());
+	packet.push_front(SDR_HEADER::F2FIFO(elems));
+	SendPacket(packet);
+}
+
+void OPacketStream::SendMessage(uint8_t msgId, const list<uint32_t> &data)
+{
+	list<uint32_t> packet(data);
+
+	packet.push_front(SDR_HEADER::F2CPU(msgId, data.size()));
+	SendPacket(packet);
+}
+
+bool OPacketStream::SendPacket(const list<uint32_t> &data)
+{
+	auto size = data.size() * sizeof(uint32_t);
+	unique_ptr<uint8_t[]> buf(new uint8_t[size]);
+
+	cout << "SendPacket (" << data.size() << ") words" << endl ;
+	auto idx = 0;
+	for (auto elem: data)		
 	{
-		cout << std::hex << this->d_buffer[i] << " ";
+		const uint8_t *ptr = reinterpret_cast<const uint8_t *>(&data);
+
+		for (size_t i = 0; i < sizeof(uint32_t); i++)
+		    buf[idx + i] = *ptr++;
+
+		idx += 4;
+
+		cout << std::hex << elem << " ";
 	}
 	cout << endl;
+
+    ULONG count = 0;
+	if (FT_OK != FT_WritePipeEx(handle, 1,
+				(PUCHAR)buf.get(), size , &count, 1000)) {
+					return false;
+
+	}
+	tx_count += count;
+
+	return true;
 }
 
 
-void tmp()
+IPacketStream::IPacketStream(FT_HANDLE handle)
+:streambuf()
+, istream(static_cast<streambuf*>(this))
 {
-	OPacketStream out;
+	this->flags(ios_base::unitbuf);
+
+	auto s = sizeof(this->d_buffer);
+	auto start = reinterpret_cast<char*>(this->d_buffer.data());
+
+	this->setp(start, start + s - 1);
+
+	this->handle = handle;
+	this->rx_count = 0;
+
+	read_thread = new thread(&IPacketStream::DataReaderThread, this);
+};
+
+
+void IPacketStream::DataReaderThread()
+{
+	auto size = d_buffer.size() * sizeof(uint32_t);
+    unique_ptr<uint8_t[]> buf(new uint8_t[size]);
+
+	while (!do_exit)
+	{		
+		ULONG count = 0;
+		FT_STATUS status = FT_ReadPipeEx(handle, 1, buf.get(), size, &count, timeout.count());
+		if (status != FT_OK || status != FT_TIMEOUT)
+		{
+			do_exit = true;
+			break;
+		}
+
+        this->sputn(reinterpret_cast<const char*>(buf.get()), count);
+		rx_count += count;
+		
+	}
+	printf("Read stopped\r\n");
+}
+
+
+void tmp(FT_HANDLE handle)
+{
+	OPacketStream out(handle);
+
+	ifstream f("/mnt/backup/P8H77-I-ASUS-1102.CAP", ifstream::binary);
+
+	out << f.rdbuf();
+
+	f.close();
 
 	uint32_t buffer[] = {0xffaafeed,0xabcdefaa,0xffaafeed,0xabcdefaa, 0xffaafeed,0xabcdefaa, 0x55000011};
 	char* buf_ptr = reinterpret_cast<char*>(buffer);
 
-	//out.write(buf_ptr, sizeof(buffer));
+	out.write(buf_ptr, sizeof(buffer));
+
+	out.SendMessage(3, {0x11111111, 0x88888888, 0x33333333});
 	//out.flush();
 	//out.write(buf_ptr, 4);//sizeof(buffer));
 	//out.write(&buf_ptr[4], 16);
 	//out.write(&buf_ptr[20], 4);
 
-	out << "abcdefghijklmnopqrstuvwxyz";
+	//out << "abcdefghijklmnopqrstuvwxyz";
 	
 	//out << "hello" << ',' << " world: " << 42 << "\n";
 	//out << std::nounitbuf << "not" << " as " << "many" << " calls\n" << std::flush;
 
-	out.write(buf_ptr, 4);
+	out.write(buf_ptr, 8);
+
+
 }
 
 static void show_throughput(FT_HANDLE handle)
@@ -592,9 +681,7 @@ void test(FT_HANDLE handle)
 }
 
 int main(int argc, char *argv[])
-{
-	tmp();	
-			
+{			
 	get_version();
 
 	if (!validate_arguments(argc, argv)) {
@@ -619,6 +706,8 @@ int main(int argc, char *argv[])
 		printf("Failed to create device\r\n");
 		return -1;
 	}
+
+	tmp(handle);	
 
 #if 1
 	test(handle);
