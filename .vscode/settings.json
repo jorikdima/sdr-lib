@@ -41,5 +41,6 @@
         "typeinfo": "cpp",
         "utility": "cpp",
         "list": "cpp"
-    }
+    },
+    "C_Cpp.errorSquiggles": "Enabled"
 }
